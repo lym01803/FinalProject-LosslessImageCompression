@@ -1,0 +1,84 @@
+train:
+  model:
+    name: IDFlows
+    nflows: 8
+    nbits: 8
+    nsplit: 3
+    H: 64
+    W: 64
+    C: 3
+    couple:
+      name: AdditiveCouple
+      split: 0.75
+      nn:
+        name: DenseBlock
+        growth_channel: 512
+        depth: 12
+        layer:
+          name: DenseLayer
+          act: ReLU
+      round:
+        name: Round
+        nbits: 8
+    extenddim:
+      name: ExtendDim
+      scale: 2
+    prior:
+      name: Prior
+      round:
+        name: Round
+        nbits: 8
+      nn:
+        name: DenseBlock
+        growth_channel: 512
+        depth: 12
+        layer:
+          name: DenseLayer
+          act: ReLU
+    distribution:
+      name: DLogistic
+    round:
+      name: Round
+      nbits: 8
+
+  train_dataloader:
+    name: CustomDataLoader
+    dataset:
+      name: ImageNet64Dataset
+      path: "/home/yanming/files/ImageNet64"
+      size: 
+        - 3
+        - 64
+        - 64
+      train: True
+    batch_size: 16
+    nbits: 8
+    train: True
+  test_dataloader:
+    name: CustomDataLoader
+    dataset:
+      name: ImageNet64Dataset
+      path: "/home/yanming/files/ImageNet64/"
+      size:
+        - 3
+        - 64
+        - 64
+      train: False
+    batch_size: 16
+    nbits: 8
+    train: False
+  
+  optimizer:
+    name: Adamax
+    lr: 0.001
+  scheduler:
+    name: WarmUpScheduler
+    warmup: 10
+    beta: 0.99
+  max_step: 1000000
+  step_per_epoch: 1000
+  evaluate_interval: 10000
+  save_interval: 25000
+  save_path: "./logs/model_for_imagenet64"
+  writer_path: "./logs/log_for_imagenet64"
+
