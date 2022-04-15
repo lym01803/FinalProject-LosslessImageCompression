@@ -1,0 +1,84 @@
+model:
+  name: IDFlows
+  checkpoint: "/home/yanming/files/IDFLOW/logs/model_for_celeba_128.pth"
+  nflows: 8
+  nbits: 8
+  nsplit: 4
+  H: 128
+  W: 96
+  C: 3
+  couple:
+    name: AdditiveCouple
+    split: 0.75
+    nn:
+      name: DenseBlock
+      growth_channel: 512
+      depth: 8
+      layer:
+        name: DenseLayer
+        act: ReLU
+    round:
+      name: Round
+      nbits: 8
+  extenddim:
+    name: ExtendDim
+    scale: 2
+  prior:
+    name: Prior
+    round:
+      name: Round
+      nbits: 8
+    nn:
+      name: DenseBlock
+      growth_channel: 256
+      depth: 8
+      layer:
+        name: DenseLayer
+        act: ReLU
+  distribution:
+    name: DLogistic
+  round:
+    name: Round
+    nbits: 8
+
+options:
+  output: "./vis/celeba128"
+  latent_shape:
+    -
+      - 6
+      - 64
+      - 48
+    -
+      - 12
+      - 32
+      - 24
+    -
+      - 24
+      - 16
+      - 12
+    -
+      - 96
+      - 8
+      - 6
+  sample:
+    batch_size: 16
+    nums: 64
+    temp:
+      - 0.25
+      - 0.5
+      - 0.55
+      - 0.6
+      - 0.65
+      - 0.7
+      - 0.75
+      - 0.8
+      - 0.85
+      - 0.9
+      - 0.95
+      - 1.0 
+      - 1.25
+      - 1.5
+      - 1.8
+      - 2.0 
+    nrow: 8
+  
