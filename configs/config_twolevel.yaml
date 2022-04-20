@@ -90,7 +90,7 @@ train:
       round:
         name: Round
         nbits: 8
-    batchsize: 1536
+    batchsize: 1536 # For 3 x 8 x 8 patch
 
   train_dataloader:
     name: CommonDataLoader
