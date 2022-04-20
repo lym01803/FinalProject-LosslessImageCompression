@@ -13,6 +13,7 @@ import torchvision.utils as vutils
 from distlib import DLogistic
 from flows import NNFlows
 from trainer import Trainer
+from moduleregister import Register
 
 import numpy as np
 import os
@@ -33,6 +34,10 @@ if __name__ == '__main__':
 
     config = yaml.load(open(args.config, 'r'), Loader=yaml.SafeLoader)
     
-    main_trainer = Trainer(**config.pop('train'))
+    train_config = config.pop('train')
+    if 'trainer' in train_config:
+        main_trainer = Register.get(train_config.pop('trainer'))(**train_config)
+    else:
+        main_trainer = Trainer(**train_config)
     main_trainer.train()
 

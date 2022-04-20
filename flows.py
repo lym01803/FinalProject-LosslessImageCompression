@@ -5,10 +5,12 @@ from torch.nn.parameter import Parameter
 import random
 from copy import deepcopy
 
+import math
+
 import moduleregister
 from invertible import InvertibleModuleList, Permute
-from extenddim import NNExtendDim
-from roundlib import NNRound
+from extenddim import NNExtendDim, Patching
+from roundlib import NNRound, Round
 from distlib import NNDistribution
 from couplelib import NNCouple
 from priorlib import NNPrior
@@ -54,10 +56,11 @@ class IDFlows(nn.Module):
         channel = C
         h = H
         w = W
+        extendscale = extenddim.get('scale')
         for split_level in range(self.nsplit):
-            channel *= 4
-            h //= 2
-            w //= 2
+            channel *= extendscale * extendscale
+            h //= extendscale
+            w //= extendscale
             flow_module = InvertibleModuleList()
             for flow_idx in range(self.nflows):
                 flow_module.append(Permute(dim=channel))
@@ -152,3 +155,95 @@ class IDFlows(nn.Module):
     def decode(self, x):
         pass
 
+
+@NNFlows.register
+class TwoLevelFlows(nn.Module):
+    def __init__(self, H, W, C, pad, fine_flows, rough_flows, batchsize=256, nbits=8):
+        """
+        For convenience, assume that fine and rough has nsplit=1.
+        The batchsize is used for the fined patches.
+        """
+        super().__init__()
+        self.H = H + pad[0]
+        self.W = W + pad[1]
+        self.C = C
+        self.pad = pad
+        self.pad2d = nn.ReplicationPad2d(padding=(0, pad[1], 0, pad[0]))
+        self.fine = NNFlows.get(fine_flows.pop('name'))(**fine_flows)
+        self.rough = NNFlows.get(rough_flows.pop('name'))(**rough_flows)
+        self.pool = nn.AdaptiveAvgPool2d((self.rough.H, self.rough.W))
+        self.invpool = nn.AdaptiveAvgPool2d((self.H, self.W))
+        self.patching = Patching(self.H, self.W, self.fine.H, self.fine.W)
+        self.latents_shape = [deepcopy(self.rough.latents_shape[0]), deepcopy(self.fine.latents_shape[0])]
+        self.latents_shape[1] = (self.latents_shape[1][0] * (self.H // self.fine.H) * (self.W // self.fine.W), 
+                                 self.latents_shape[1][1], self.latents_shape[1][2]) # channel - dim
+        self.batchsize = batchsize
+        self.ratio = (self.H // self.fine.H, self.W // self.fine.W)
+        self.round = Round(nbits=nbits)
+
+    def forward(self, x, logv, train=True):
+        '''
+        To save cuda memory, need to do backward inside this function.
+        '''
+        x = self.pad2d(x)
+        rx = self.round(self.pool(x))
+        fx = x - self.invpool(rx)
+        rlatent, rmean, rlogscale, logv = self.rough.forward(rx, logv)
+        flatents, fmeans, flogscales = [], [], []
+        logP, logPs = self.rough.log_likelihood(rlatent, rmean, rlogscale)
+        loss = torch.mean(-logP, dim=0)
+        if train:
+            loss.backward()
+        bpd1 = loss.item() / math.log(2)
+        rlatent, rmean, rlogscale = rlatent[0], rmean[0], rlogscale[0]
+        # flatents, fmeans, flogscales = [], [], []
+        px, logv = self.patching(fx, logv)
+        nums = px.shape[0]
+        bs = self.batchsize
+        bpd2 = 0.
+        for i in range((nums + bs - 1) // bs):
+            bpx = px[bs * i : bs * i + bs]
+            flatent, fmean, flogscale, logv = self.fine.forward(bpx, logv)
+            logP, logPs = self.fine.log_likelihood(flatent, fmean, flogscale)
+            loss = torch.mean(-logP, dim=0)
+            if train:
+                loss.backward()
+            bpd2 += loss.item() / math.log(2) * bpx.shape[0]
+            flatents.append(flatent[0])
+            fmeans.append(fmean[0])
+            flogscales.append(flogscale[0])
+        bpd2 /= px.shape[0]
+        bpd = (bpd1 * self.rough.H * self.rough.W + bpd2 * self.H * self.W) / (self.H - self.pad[0]) / (self.W - self.pad[1])
+        latents = [rlatent, torch.cat(flatent, dim=0)]
+        means = [rmean, torch.cat(fmeans, dim=0)]
+        logscales = [rlogscale, torch.cat(flogscales, dim=0)]
+        return latents, means, logscales, bpd, bpd1, bpd2, logv
+
+    def generated_from_noise(self, latents):
+        '''
+        latents = [rlatent, flatent]
+        rlatent will be in shape (bs, c, rh, rw)
+        flatent will be in shape (bs, c*num, fh, fw)
+        '''
+        bs = latents[0].shape[0]
+        # print(latents[0].shape, latents[1].shape)
+        rx = self.rough.generated_from_noise([latents[0]])
+        fx = []
+        flatents = latents[1].view(-1, self.C * 4, latents[1].shape[2], latents[1].shape[3])
+        # print(flatents.shape)
+        # input()
+        bs = self.batchsize
+        nums = flatents.shape[0]
+        for i in range((nums + bs - 1) // bs):
+            fx.append(self.fine.generated_from_noise(
+                [flatents[i * bs : i * bs + bs]]
+            ))
+        fx = torch.cat(fx, dim=0)
+        fx = self.patching.backward(fx)
+        x = self.invpool(rx) + fx 
+        x = x[:, :, :x.shape[2] - self.pad[0], :x.shape[3] - self.pad[1]]
+        return x
+
+    def inverse(self):
+        self.fine.inverse()
+        self.rough.inverse()

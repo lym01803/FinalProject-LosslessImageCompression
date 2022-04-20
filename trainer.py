@@ -241,5 +241,104 @@ class Trainer:
                     step=self.step
                 )
                 torch.save(state, self.save_path)
-                    
+
+
+@Register.register
+class TwoLevelTrainer:
+    def __init__(self,
+                 model,
+                 train_dataloader,
+                 test_dataloader,
+                 optimizer,
+                 scheduler,
+                 max_step,
+                 step_per_epoch,
+                 evaluate_interval,
+                 save_interval,
+                 save_path,
+                 writer_path):
+    
+        if 'load_path' in model:
+            load_path = model.pop('load_path')
+        else:
+            load_path = None
+        self.model = NNFlows.get(model.pop('name'))(**model).cuda()
+        self.trainloader = Register.get(train_dataloader.pop('name'))(**train_dataloader)
+        self.testloader = Register.get(test_dataloader.pop('name'))(**test_dataloader)
+        self.optimizer = Register.get(optimizer.pop('name'))(self.model.parameters(), **optimizer)
+        self.scheduler = Register.get(scheduler.pop('name'))(self.optimizer, **scheduler)
+        self.max_step = max_step
+        self.step_per_epoch = step_per_epoch
+        self.evaluate_interval = evaluate_interval
+        self.save_interval = save_interval
+        self.save_path = save_path
+        self.writer = SummaryWriter(log_dir=writer_path)
+        self.step = 0
+        self.dist = DLogistic()
+        if load_path:
+            pass
+
+    def train(self):
+        for iter in tqdm(range(self.max_step)):
+            self.step += 1
+            
+            data = next(self.trainloader).cuda()
+            
+            self.model.train()
+
+            x, means, logscales, bpd, bpd1, bpd2, logv = self.model.forward(data, None)
+
+            self.optimizer.step()
+            self.model.zero_grad()
+            if self.step % self.step_per_epoch == 0:
+                self.scheduler.step()
+
+            # self.writer.add_scalar('train loss', loss.item(), self.step)
+            # bpd = loss.item() / math.log(2.)
+            self.writer.add_scalar('train bpd', bpd, self.step)
+            self.writer.add_scalar('train bpd 1', bpd1, self.step)
+            self.writer.add_scalar('train bpd 2', bpd2, self.step)
+
+            if self.step <= 3 or (self.step % self.step_per_epoch == 0 and self.step < self.evaluate_interval) or self.step % self.evaluate_interval == 0:
+                print()
+                for splitid, latent in enumerate(x):
+                    max_z = torch.max(latent * 256).item()
+                    min_z = torch.min(latent * 256).item()
+                    print(f'part_id: {splitid} , max_z : {max_z} , min_z : {min_z}')
+                print()
+
+                bpds = []
+                bpd1s = []
+                bpd2s = []
+                self.model.eval()
+                for data in tqdm(self.testloader):
+                    data = data.cuda()
+                    with torch.no_grad():
+                        x, means, logscales, bpd, bpd1, bpd2, logv = self.model.forward(data, None, train=False)
+                        bpds.append(bpd)
+                        bpd1s.append(bpd1)
+                        bpd2s.append(bpd2)
+
+                self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
+                self.writer.add_scalar('test bpd 1', sum(bpd1s) / len(bpd1s), self.step)
+                self.writer.add_scalar('test bpd 2', sum(bpd2s) / len(bpd2s), self.step)
+
+                self.model.inverse()
+                latents = []
+                bs = 4
+                with torch.no_grad():
+                    for shape in self.model.latents_shape:
+                        noise = self.dist.sample(torch.zeros((bs,)+shape), torch.zeros((bs,)+shape))
+                        latents.append(noise.cuda())
+                    for t in [0.25, 0.5, 0.75, 1.0]:
+                        generated = self.model.generated_from_noise([latent * t for latent in latents])
+                        self.writer.add_image(f't={t}', vutils.make_grid(generated, nrow=4), self.step)
+
+            if (self.step % self.step_per_epoch == 0 and self.step < self.save_interval) or self.step % self.save_interval == 0:
+                state = dict(
+                    model=self.model.state_dict(),
+                    optimizer=self.optimizer.state_dict(),
+                    step=self.step
+                )
+                torch.save(state, self.save_path)
 

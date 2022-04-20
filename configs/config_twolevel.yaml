@@ -1,0 +1,133 @@
+train:
+  trainer: TwoLevelTrainer
+  model:
+    name: TwoLevelFlows
+    H: 215
+    W: 178
+    C: 3
+    pad:
+      - 1
+      - 6
+    fine_flows:
+      name: IDFlows
+      nflows: 12
+      nbits: 8
+      nsplit: 1
+      H: 8
+      W: 8
+      C: 3
+      couple:
+        name: AdditiveCouple
+        split: 0.75
+        nn:
+          name: DenseBlock
+          growth_channel: 512
+          depth: 8
+          layer:
+            name: DenseLayer
+            act: ReLU
+        round:
+          name: Round
+          nbits: 8
+      extenddim:
+        name: ExtendDim
+        scale: 2
+      prior:
+        name: Prior
+        round:
+          name: Round
+          nbits: 8
+        nn:
+          name: DenseBlock
+          growth_channel: 512
+          depth: 8
+          layer:
+            name: DenseLayer
+            act: ReLU
+      distribution:
+        name: DLogistic
+      round:
+        name: Round
+        nbits: 8
+    rough_flows:
+      name: IDFlows
+      nflows: 12
+      nbits: 8
+      nsplit: 1
+      H: 27
+      W: 23
+      C: 3
+      couple:
+        name: AdditiveCouple
+        split: 0.75
+        nn:
+          name: DenseBlock
+          growth_channel: 512
+          depth: 8
+          layer:
+            name: DenseLayer
+            act: ReLU
+        round:
+          name: Round
+          nbits: 8
+      extenddim:
+        name: ExtendDim
+        scale: 1
+      prior:
+        name: Prior
+        round:
+          name: Round
+          nbits: 8
+        nn:
+          name: DenseBlock
+          growth_channel: 512
+          depth: 8
+          layer:
+            name: DenseLayer
+            act: ReLU
+      distribution:
+        name: DLogistic
+      round:
+        name: Round
+        nbits: 8
+    batchsize: 1536
+
+  train_dataloader:
+    name: CommonDataLoader
+    path: "/home/yanming/files/flow_project/data/img_align_train"
+    batch_size: 8
+    resize:
+      - 215
+      - 178
+    centercrop:
+      - 215
+      - 178
+    nbits: 8
+    train: True
+  test_dataloader:
+    name: CommonDataLoader
+    path: "/home/yanming/files/flow_project/data/img_align_test"
+    batch_size: 8
+    resize:
+      - 215
+      - 178
+    centercrop:
+      - 215
+      - 178
+    nbits: 8
+    train: False
+  
+  optimizer:
+    name: Adamax
+    lr: 0.001
+  scheduler:
+    name: WarmUpScheduler
+    warmup: 10
+    beta: 0.99
+  max_step: 1000000
+  step_per_epoch: 500
+  evaluate_interval: 2500
+  save_interval: 10000
+  save_path: "./logs/model_for_celeba_full.pth"
+  writer_path: "./logs/log_for_celeba_full"
+

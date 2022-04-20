@@ -1,0 +1,65 @@
+model:
+  checkpoint: /home/yanming/files/IDFLOW/logs/model_for_imagenet64
+  name: IDFlows
+  nflows: 8
+  nbits: 8
+  nsplit: 3
+  H: 64
+  W: 64
+  C: 3
+  couple:
+    name: AdditiveCouple
+    split: 0.75
+    nn:
+      name: DenseBlock
+      growth_channel: 512
+      depth: 12
+      layer:
+        name: DenseLayer
+        act: ReLU
+    round:
+      name: Round
+      nbits: 8
+  extenddim:
+    name: ExtendDim
+    scale: 2
+  prior:
+    name: Prior
+    round:
+      name: Round
+      nbits: 8
+    nn:
+      name: DenseBlock
+      growth_channel: 512
+      depth: 12
+      layer:
+        name: DenseLayer
+        act: ReLU
+  distribution:
+    name: DLogistic
+  round:
+    name: Round
+    nbits: 8
+
+options:
+  output: "./vis/imagenet64"
+  latent_shape:
+    -
+      - 6
+      - 32
+      - 32
+    -
+      - 12
+      - 16
+      - 16
+    -
+      - 48
+      - 8
+      - 8
+  sample:
+    batch_size: 64
+    nums: 4096
+    temp:
+      - 1.0
+    nrow: 32
+  
