@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.init import normal_, _no_grad_fill_
 from torch.nn.parameter import Parameter
@@ -53,3 +54,32 @@ class DenseBlock(nn.Module):
         for layer in self.layers:
             x = layer(x)
         return x 
+
+
+@NNBlock.register
+class ResBlock(nn.Module):
+    def __init__(self, channel: int, batch_norm: bool=False):
+        super().__init__()
+        self.channel = channel
+        if batch_norm:
+            self.resblock = nn.Sequential(
+                nn.Conv2d(channel, channel, kernel_size=3, padding=1),
+                nn.ReLU(True),
+                nn.BatchNorm2d(channel),
+                nn.Conv2d(channel, channel, kernel_size=3, padding=1),
+                nn.BatchNorm2d(channel)
+            )
+        else:
+            self.resblock = nn.Sequential(
+                nn.Conv2d(channel, channel, kernel_size=3, padding=1),
+                nn.ReLU(True),
+                nn.Conv2d(channel, channel, kernel_size=3, padding=1)
+            )
+        self.act = nn.ReLU(True)
+    
+    def forward(self, x: Tensor) -> Tensor:
+        res = self.resblock(x)
+        x = x + res
+        x = self.act(x)
+        return x
+

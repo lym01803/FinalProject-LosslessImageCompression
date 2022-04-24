@@ -1,4 +1,5 @@
 from pickletools import optimize
+from unittest import TestLoader
 import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
@@ -22,6 +23,7 @@ from PIL import Image
 from moduleregister import Register
 from flows import NNFlows
 from roundlib import Round
+from vqvae import EnDecoder
 
 
 def cycle(iterable):
@@ -32,7 +34,7 @@ def cycle(iterable):
 
 @Register.register
 class CommonDataLoader:
-    def __init__(self, path, batch_size, shuffle=True, resize=None, centercrop=None, nbits=8, train=False):
+    def __init__(self, path, batch_size, shuffle=True, resize=None, centercrop=None, nbits=8, train=False, pad=None):
         self.path = path
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -51,6 +53,7 @@ class CommonDataLoader:
         else:
             self.iter = iter(self.loader)
         self.round = Round(nbits=nbits)
+        self.pad = nn.ReplicationPad2d(padding=(0, pad[1], 0, pad[0])) if pad else None
     
     def __iter__(self):
         return self
@@ -58,6 +61,8 @@ class CommonDataLoader:
     def __next__(self):
         try:
             data, label = next(self.iter)
+            if self.pad:
+                data = self.pad(data)
             return self.round(data)
         except StopIteration as e:
             self.iter = iter(self.loader)
@@ -66,7 +71,7 @@ class CommonDataLoader:
 
 @Register.register
 class CustomDataLoader:
-    def __init__(self, dataset, batch_size, shuffle=True, nbits=8, train=False):
+    def __init__(self, dataset, batch_size, shuffle=True, nbits=8, train=False, pad=None):
         self.dataset = Register.get(dataset.pop('name'))(**dataset)
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -77,6 +82,7 @@ class CustomDataLoader:
         else:
             self.iter = iter(self.loader)
         self.round = Round(nbits=nbits)
+        self.pad = nn.ReplicationPad2d(padding=(0, pad[1], 0, pad[0])) if pad else None
     
     def __iter__(self):
         return self
@@ -84,6 +90,8 @@ class CustomDataLoader:
     def __next__(self):
         try:
             data = next(self.iter)
+            if self.pad:
+                data = self.pad(data)
             return self.round(data)
         except StopIteration as e:
             self.iter = iter(self.loader)
@@ -145,7 +153,7 @@ class WarmUpScheduler(LambdaLR):
 
 
 Register.record['Adamax'] = Adamax
-
+Register.record['Adam'] = Adam
 
 class Trainer:
     def __init__(self,
@@ -342,3 +350,91 @@ class TwoLevelTrainer:
                 )
                 torch.save(state, self.save_path)
 
+
+@Register.register
+class VQVAETrainer:
+    def __init__(self,
+                 model,
+                 train_dataloader,
+                 test_dataloader,
+                 optimizer,
+                 scheduler,
+                 max_step,
+                 step_per_epoch,
+                 evaluate_interval,
+                 save_interval,
+                 save_path,
+                 writer_path,
+                 train_args={}):
+    
+        if 'load_path' in model:
+            load_path = model.pop('load_path')
+        else:
+            load_path = None
+        self.model = EnDecoder.get(model.pop('name'))(**model).cuda()
+        self.trainloader = Register.get(train_dataloader.pop('name'))(**train_dataloader)
+        self.testloader = Register.get(test_dataloader.pop('name'))(**test_dataloader)
+        self.optimizer = Register.get(optimizer.pop('name'))(self.model.parameters(), **optimizer)
+        self.scheduler = Register.get(scheduler.pop('name'))(self.optimizer, **scheduler)
+        self.max_step = max_step
+        self.step_per_epoch = step_per_epoch
+        self.evaluate_interval = evaluate_interval
+        self.save_interval = save_interval
+        self.save_path = save_path
+        self.writer = SummaryWriter(log_dir=writer_path)
+        self.step = 0
+        self.alpha = train_args.pop('alpha')
+        self.train_args = train_args
+        if load_path:
+            pass
+
+    def train(self):
+        for iter in tqdm(range(self.max_step)):
+            self.step += 1
+            
+            data = next(self.trainloader).cuda()
+            
+            self.model.train()
+            # the input should be in [-1, 1], but data is default in [0, 1]
+            x, vqloss = self.model.encode(x=(data - 0.5) / 0.5, require_loss=True, **self.train_args)
+            x = self.model.decode(x) * 0.5 + 0.5 # x to [0, 1]
+            recloss = - self.model.dist.log_prob(x=data, y=x) # x is the param, data is the sample
+            recloss = torch.mean(recloss)
+            loss = self.alpha * recloss + vqloss
+            loss.backward()
+
+            self.optimizer.step()
+            self.model.zero_grad()
+            if self.step % self.step_per_epoch == 0:
+                self.scheduler.step()
+
+            self.writer.add_scalar('train loss', loss.item(), self.step)
+            self.writer.add_scalar('train recloss', recloss.item(), self.step)
+            self.writer.add_scalar('train vqloss', vqloss.item(), self.step)
+
+            bpd = recloss.item() / math.log(2.)
+            self.writer.add_scalar('train bpd', bpd, self.step)
+
+            if (self.step % self.step_per_epoch == 0 and self.step < self.evaluate_interval) or self.step % self.evaluate_interval == 0:
+                bpds = []
+                self.model.eval()
+                for data in self.testloader:
+                    data = data.cuda()
+                    with torch.no_grad():
+                        x = self.model.encode(x=(data - 0.5) / 0.5, require_loss=False)
+                        x = self.model.decode(x) * 0.5 + 0.5
+                        recloss = - self.model.dist.log_prob(x=data, y=x) # x is the param, data is the sample
+                        recloss = torch.mean(recloss)
+                        bpd = recloss.item() / math.log(2.)
+                        bpds.append(bpd)
+                self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
+                self.writer.add_image(f're-construct', vutils.make_grid(x, nrow=4), self.step)
+
+
+            if (self.step % self.step_per_epoch == 0 and self.step < self.save_interval) or self.step % self.save_interval == 0:
+                state = dict(
+                    model=self.model.state_dict(),
+                    optimizer=self.optimizer.state_dict(),
+                    step=self.step
+                )
+                torch.save(state, self.save_path)

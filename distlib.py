@@ -4,6 +4,8 @@ from torch.nn import functional as F
 from roundlib import NNRound, Round
 import moduleregister
 
+from torch.distributions.binomial import Binomial
+
 
 class NNDistribution(moduleregister.Register):
     def __init__(self):
@@ -66,3 +68,22 @@ class DLogistic(Distribution):
         rounded_samples = self.round(affined_samples, nbits=nbits)
         return rounded_samples
 
+
+@NNDistribution.register
+class BinomialDistribution(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def log_prob(self, x, y):
+        '''
+        x, y should be in 0~1
+        it is better to round x in nbits=8
+        x is the data (sample)
+        y is the param for distribution
+        '''
+        x = torch.round(x * 255)
+        dist = Binomial(255, y)
+        return dist.log_prob(x)
+
+    def sample(self, y):
+        pass
