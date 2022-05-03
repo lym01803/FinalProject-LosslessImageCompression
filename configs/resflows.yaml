@@ -1,18 +1,19 @@
 train:
-  model:
+  trainer: ResidualTrainer
+  flows:
     name: IDFlows
-    nflows: 8
+    nflows: 16
     nbits: 8
-    nsplit: 3
-    H: 216 # 64
-    W: 184 # 48
+    nsplit: 1
+    H: 54
+    W: 46
     C: 3
     couple:
       name: AdditiveCouple
       split: 0.75
       nn:
         name: DenseBlock
-        growth_channel: 384
+        growth_channel: 256
         depth: 8
         layer:
           name: DenseLayer
@@ -30,8 +31,8 @@ train:
         nbits: 8
       nn:
         name: DenseBlock
-        growth_channel: 512
-        depth: 12
+        growth_channel: 256
+        depth: 8
         layer:
           name: DenseLayer
           act: LeakyReLU
@@ -40,7 +41,39 @@ train:
     round:
       name: Round
       nbits: 8
-
+  vqvae:
+    name: VQVAE
+    checkpoint: '/home/yanming/files/IDFLOW/logs/vqvae_for_celeba_full_reinit_copy.pth'
+    channel: 3
+    embed_num: 8192
+    embed_dim: 512
+    encoder:
+      name: VQEncoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    decoder:
+      name: VQDecoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    distribution:
+      name: BinomialDistribution
+    vectorquantizer:
+      reinit_interval: 1000
+      threshold: 0.1
+    hidden_dims:
+      - 128
+      - 256
+      - 512 # // 8
+    batch_norm: False
+  
+  input_size:
+    - 216
+    - 184
+  
   train_dataloader:
     name: CommonDataLoader
     path: "/home/yanming/files/flow_project/data/img_align_train"
@@ -83,6 +116,5 @@ train:
   step_per_epoch: 1000
   evaluate_interval: 5000
   save_interval: 20000
-  save_path: "./logs/model_for_celeba_216_184.pth"
-  writer_path: "./logs/log_for_celeba_216_184"
-
+  save_path: "./logs/resflows.pth"
+  writer_path: "./logs/log_for_resflows"

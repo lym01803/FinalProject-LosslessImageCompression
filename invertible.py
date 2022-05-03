@@ -69,3 +69,8 @@ class InvertibleModuleList(InvertibleModule, nn.ModuleList):
             m = self.__getitem__(self.__len__() - 1 - i)
             x = m.backward(x, *args, **kwargs)
         return x
+
+
+class LULinear(InvertibleModule):
+    def __init__(self):
+        super().__init__()

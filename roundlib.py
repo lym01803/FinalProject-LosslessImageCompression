@@ -69,7 +69,7 @@ class VectorQuantizer(nn.Module):
 
         vq_x = x + (vq_x - x).detach()
 
-        if self.train:
+        if self.training:
             self.count.index_add_(0, idx, torch.ones_like(idx).float() / (idx.shape[0]))
             self.iter_count += 1
             if self.reinit_interval and torch.sum(self.count) > self.reinit_interval:

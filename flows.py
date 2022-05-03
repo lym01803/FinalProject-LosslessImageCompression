@@ -9,7 +9,7 @@ import math
 
 import moduleregister
 from invertible import InvertibleModuleList, Permute
-from extenddim import NNExtendDim, Patching
+from extenddim import ExtendDim, NNExtendDim, Patching
 from roundlib import NNRound, Round
 from distlib import NNDistribution
 from couplelib import NNCouple
@@ -121,6 +121,19 @@ class IDFlows(nn.Module):
                 mean, logscale = block['prior'](z)
                 z = z * torch.exp(logscale) + mean
                 z = self.round(z)
+                x = z
+            x = block['flows'].backward(x)
+            x = block['extend'].backward(x)
+        return x
+
+    def generated_from_latents(self, latents):
+        for idx in range(self.nsplit):
+            split_level = self.nsplit - 1 - idx
+            block = self.blocks[split_level] 
+            z = latents[split_level]
+            if split_level < self.nsplit - 1:
+                x = torch.cat((z, x), dim=1)
+            else: 
                 x = z
             x = block['flows'].backward(x)
             x = block['extend'].backward(x)
@@ -247,3 +260,69 @@ class TwoLevelFlows(nn.Module):
     def inverse(self):
         self.fine.inverse()
         self.rough.inverse()
+
+
+@NNFlows.register
+class ConditionalFlows(IDFlows):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # x = \bar(x) + res
+        # \bar(x) will be the condition fed into nn_prior
+        # nn_prior will have additional input channels
+        ch = self.C
+        for split_level in range(self.nsplit):
+            block = self.blocks[split_level]
+            extend = block['extend']
+            extend: ExtendDim
+            scale = extend.scale    
+            ch *= scale * scale
+            prior = block['prior']
+            block['prior'] = self.prior_type(prior.out_channel,
+                                             prior.cond_channel + ch if prior.cond_channel > 0 else prior.out_channel + ch, 
+                                             **deepcopy(kwargs.get('prior')))   
+        
+    def forward(self, x, logv, cond):
+        latents = []
+        means = []
+        logscales = []
+        for split_level in range(self.nsplit):
+            block = self.blocks[split_level]
+            x, logv = block['extend'](x, logv)
+            cond, _ = block['extend'](cond, None)
+            x, logv = block['flows'](x, logv)
+            if split_level < self.nsplit - 1:
+                z, x = x[:, :x.shape[1] // 2], x[:, x.shape[1] // 2:]
+                mean, logscale = block['prior'](torch.cat((x, cond), dim=1))
+                latents.append(z) # z must be rounded (nbits)
+                means.append(mean)
+                logscales.append(logscale)
+            else:
+                z = x
+                mean, logscale = block['prior'](torch.cat((torch.zeros_like(x), cond), dim=1))
+                latents.append(z) # z must be rounded (nbits)
+                means.append(mean)
+                logscales.append(logscale)
+        return latents, means, logscales, logv
+
+    def generated_from_noise(self, latents, cond):
+        for idx in range(self.nsplit):
+            cond, _ = self.blocks[idx]['extend'](cond, None)
+        for idx in range(self.nsplit):
+            split_level = self.nsplit - 1 - idx
+            block = self.blocks[split_level] 
+            z = latents[split_level]
+            if split_level < self.nsplit - 1:
+                mean, logscale = block['prior'](torch.cat((x, cond), dim=1))
+                z = z * torch.exp(logscale) + mean
+                z = self.round(z)
+                x = torch.cat((z, x), dim=1)
+            else: 
+                mean, logscale = block['prior'](torch.cat((torch.zeros_like(z), cond), dim=1))
+                z = z * torch.exp(logscale) + mean
+                z = self.round(z)
+                x = z
+            x = block['flows'].backward(x)
+            x = block['extend'].backward(x)
+            cond = block['extend'].backward(cond)
+        return x
+
