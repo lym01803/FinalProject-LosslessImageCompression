@@ -553,8 +553,8 @@ class ResidualTrainer:
             if (self.step % self.step_per_epoch == 0 and self.step < self.evaluate_interval) or self.step % self.evaluate_interval == 0:
                 print()
                 for splitid, latent in enumerate(x):
-                    max_z = torch.max(latent * 256).item()
-                    min_z = torch.min(latent * 256).item()
+                    max_z = torch.max(latent * (2 ** self.model.round.nbits)).item()
+                    min_z = torch.min(latent * (2 ** self.model.round.nbits)).item()
                     bpd_for_split = torch.mean(-logPs[splitid], dim=0).item() / math.log(2.)
                     print(f'split_id: {splitid} , max_z : {max_z} , min_z : {min_z} , bpd_for_split : {bpd_for_split}')
                 print()

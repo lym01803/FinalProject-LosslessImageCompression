@@ -264,12 +264,15 @@ class TwoLevelFlows(nn.Module):
 
 @NNFlows.register
 class ConditionalFlows(IDFlows):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, conv_for_cond=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # x = \bar(x) + res
         # \bar(x) will be the condition fed into nn_prior
         # nn_prior will have additional input channels
         ch = self.C
+        self.conv_for_cond = conv_for_cond
+        if conv_for_cond:
+            self.convs = nn.ModuleList()
         for split_level in range(self.nsplit):
             block = self.blocks[split_level]
             extend = block['extend']
@@ -279,7 +282,11 @@ class ConditionalFlows(IDFlows):
             prior = block['prior']
             block['prior'] = self.prior_type(prior.out_channel,
                                              prior.cond_channel + ch if prior.cond_channel > 0 else prior.out_channel + ch, 
-                                             **deepcopy(kwargs.get('prior')))   
+                                             **deepcopy(kwargs.get('prior')))
+            if conv_for_cond:
+                self.convs.append(
+                    nn.Conv2d(ch // scale // scale, ch, 4, 2, 1)
+                )
         
     def forward(self, x, logv, cond):
         latents = []
@@ -288,7 +295,10 @@ class ConditionalFlows(IDFlows):
         for split_level in range(self.nsplit):
             block = self.blocks[split_level]
             x, logv = block['extend'](x, logv)
-            cond, _ = block['extend'](cond, None)
+            if not self.conv_for_cond:
+                cond, _ = block['extend'](cond, None)
+            else:
+                cond = self.convs[split_level](cond)
             x, logv = block['flows'](x, logv)
             if split_level < self.nsplit - 1:
                 z, x = x[:, :x.shape[1] // 2], x[:, x.shape[1] // 2:]
@@ -305,24 +315,36 @@ class ConditionalFlows(IDFlows):
         return latents, means, logscales, logv
 
     def generated_from_noise(self, latents, cond):
-        for idx in range(self.nsplit):
-            cond, _ = self.blocks[idx]['extend'](cond, None)
+        if not self.conv_for_cond:
+            for idx in range(self.nsplit):
+                cond, _ = self.blocks[idx]['extend'](cond, None)
+        else:
+            conds = [self.convs[0](cond)]
+            for idx in range(1, self.nsplit):
+                conds.append(self.convs[idx](conds[-1]))
         for idx in range(self.nsplit):
             split_level = self.nsplit - 1 - idx
             block = self.blocks[split_level] 
             z = latents[split_level]
             if split_level < self.nsplit - 1:
-                mean, logscale = block['prior'](torch.cat((x, cond), dim=1))
+                if not self.conv_for_cond:
+                    mean, logscale = block['prior'](torch.cat((x, cond), dim=1))
+                else:
+                    mean, logscale = block['prior'](torch.cat((x, conds[split_level]), dim=1))
                 z = z * torch.exp(logscale) + mean
                 z = self.round(z)
                 x = torch.cat((z, x), dim=1)
             else: 
-                mean, logscale = block['prior'](torch.cat((torch.zeros_like(z), cond), dim=1))
+                if not self.conv_for_cond:
+                    mean, logscale = block['prior'](torch.cat((torch.zeros_like(z), cond), dim=1))
+                else:
+                    mean, logscale = block['prior'](torch.cat((torch.zeros_like(z), conds[split_level]), dim=1))
                 z = z * torch.exp(logscale) + mean
                 z = self.round(z)
                 x = z
             x = block['flows'].backward(x)
             x = block['extend'].backward(x)
-            cond = block['extend'].backward(cond)
+            if not self.conv_for_cond:
+                cond = block['extend'].backward(cond)
         return x
 

@@ -41,10 +41,11 @@ train:
     round:
       name: Round
       nbits: 8
-  
+    conv_for_cond: True
+    
   vqvae:
     name: VQVAE
-    checkpoint: '/home/yanming/files/IDFLOW/logs/vqvae_for_celeba_full_reinit_copy.pth'
+    checkpoint: '/home/yanming/files/IDFLOW/logs/vqvae_for_celeba_full_reinit.pth'
     channel: 3
     embed_num: 8192
     embed_dim: 512
@@ -119,5 +120,5 @@ train:
   step_per_epoch: 1000
   evaluate_interval: 5000
   save_interval: 20000
-  save_path: "./logs/resflows_direct_cond.pth"
-  writer_path: "./logs/log_for_resflows_direct_cond"
+  save_path: "./logs/resflows_direct_cond_conv_001.pth"
+  writer_path: "./logs/log_for_resflows_direct_conv_001"
