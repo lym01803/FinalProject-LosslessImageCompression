@@ -24,6 +24,8 @@ from roundlib import Round
 from vqvae import VQVAE, EnDecoder
 from extenddim import Patching
 
+from rans.rans import encode, decode
+
 
 def cycle(iterable):
     while True:
@@ -167,7 +169,8 @@ class Trainer:
                  evaluate_interval,
                  save_interval,
                  save_path,
-                 writer_path):
+                 writer_path,
+                 test_coding=False):
     
         if 'load_path' in model:
             load_path = model.pop('load_path')
@@ -187,6 +190,7 @@ class Trainer:
         self.step = 0
         if load_path:
             pass
+        self.test_coding=test_coding
 
     def train(self):
         for iter in tqdm(range(self.max_step)):
@@ -221,7 +225,8 @@ class Trainer:
 
                 bpds = []
                 self.model.eval()
-                for data in self.testloader:
+                real_bpds = []
+                for iter, data in enumerate(self.testloader):
                     data = data.cuda()
                     with torch.no_grad():
                         x, means, logscales, logv = self.model.forward(data, None)
@@ -229,7 +234,58 @@ class Trainer:
                         loss = torch.mean(-logP, dim=0)
                         bpd = loss.item() / math.log(2.)
                         bpds.append(bpd)
+                        # test coder
+                        if self.test_coding:
+                            # # for i in range(len(x)):
+                            # #     index = x[i] > (means[i] + 1000. / 256.)
+                            # #     x[i][index] = means[i][index] + 1000. / 256.
+                            # #     index = x[i] < (means[i] - 1000. / 256.)
+                            # #     x[i][index] = means[i][index] - 1000. / 256.
+                            # try:
+                            #     state, buf = Encode(x, means, logscales)
+                            #     state_, latents_ = Decode(buf, means, logscales, state)
+                            
+                            #     errors = 0
+                            #     lengths = 0
+                            #     for ii in range(len(latents_)):
+                            #         i = len(latents_) - 1 - ii
+                            #         errors += torch.sum(latents_[i] != x[i])
+                            #         if iter % 100 == 0 and torch.sum(latents_[i] != x[i]) > 0:
+                            #             print('find')
+                            #             tt = latents_[i].reshape(-1)
+                            #             xx = x[i].reshape(-1)
+                            #             for tid in tqdm(range(tt.shape[-1])):
+                            #                 t = tt.shape[-1] - 1 - tid
+                            #                 if tt[t] != xx[t]:
+                            #                     break
+                            #             print(i, tid, t, tt[t-10:t+11].tolist(), xx[t-10:t+11].tolist(), means[i].reshape(-1)[t-10:t+11].tolist(), logscales[i].reshape(-1)[t-10:t+11].tolist())
+                            #         lengths += len(buf[i])
+                            #     real_bpds.append((64 + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3]))
+                            #     if iter % 100 == 0:
+                            #         print(f'state_: {state_}, errors: {errors}, bpd: {(64 + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3])}')
+                            # except Exception as e:
+                            #     pass
+                            try:
+                                errors = 0
+                                lengths = 0
+                                for i in range(len(x)):
+                                    state = (1<<32)
+                                    xi = x[i].reshape(-1).tolist()
+                                    mi = means[i].reshape(-1).tolist()
+                                    si = torch.exp(logscales[i]).reshape(-1).tolist()
+                                    state, buf = encode(state, len(xi), xi, mi, si)
+                                    state_, msg = decode(state, buf[::-1], len(xi), mi[::-1], si[::-1])
+                                    latent = torch.tensor(msg[::-1]).reshape(*x[i].shape).to(x[i])
+                                    errors += torch.sum(x[i] != latent)
+                                    lengths += len(buf)
+                                if iter % 100 == 0:
+                                    print(f'state: {state}, state_:{state_}, errors: {errors}, bpd: {(64 * len(x) + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3])}')
+                                real_bpds.append((64 * len(x) + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3]))
+                            except:
+                                pass
                 self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
+                if len(real_bpds):
+                    self.writer.add_scalar('real bpd', sum(real_bpds) / len(real_bpds), self.step)
 
                 self.model.inverse()
                 latents = []

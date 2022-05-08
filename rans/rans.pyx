@@ -30,7 +30,7 @@ cdef inv_logistic(x: cython.float):
 
 cdef CDF(x: cython.float, mean: cython.float, scale: cython.float, lower: cython.float):
     cdef int part1, part2
-    part2 = int(round((x - lower) * 256))
+    part2 = int(round((x - lower) * 256)) + 1
     part1 = int(round(logistic((x + 0.5 / 256 - mean) / scale) * (M - 2048)))
     return part1 + part2
 
@@ -48,7 +48,7 @@ def encode(state: cython.ulonglong, n: cython.int, list x_, list mean_, list sca
 
     i = 0
     while i < n:
-        lower = round(mean[i] * 256 - 1024) / 256
+        lower = int(round(mean[i] * 256 - 1024)) / 256.
         start = CDF(x[i] - 1. / 256, mean[i], scale[i], lower)
         end = CDF(x[i], mean[i], scale[i] ,lower)
         cdf.push_back(start)

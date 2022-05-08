@@ -40,7 +40,7 @@ train:
     round:
       name: Round
       nbits: 8
-
+  test_coding: True
   train_dataloader:
     name: CommonDataLoader
     path: "/home/yanming/files/flow_project/data/img_align_train"

@@ -65,7 +65,7 @@ train:
       - 178
     nbits: 8
     train: False
-  
+  test_coding: True
   optimizer:
     name: Adamax
     lr: 0.001
@@ -77,6 +77,6 @@ train:
   step_per_epoch: 1000
   evaluate_interval: 10000
   save_interval: 25000
-  save_path: "./logs/model_for_celeba_128.pth"
-  writer_path: "./logs/log_for_celeba_128"
+  save_path: "./logs/model_for_celeba_128_test.pth"
+  writer_path: "./logs/log_for_celeba_128_test"
 

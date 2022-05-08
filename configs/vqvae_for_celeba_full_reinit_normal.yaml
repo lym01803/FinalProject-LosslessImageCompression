@@ -18,7 +18,7 @@ train:
         name: ResBlock
         batch_norm: False
     distribution:
-      name: BinomialDistribution
+      name: UnitGaussianDistribution
     vectorquantizer:
       reinit_interval: 1000
       threshold: 0.1
@@ -70,8 +70,8 @@ train:
   step_per_epoch: 1000
   evaluate_interval: 5000
   save_interval: 20000
-  save_path: "./logs/vqvae_for_celeba_full_reinit_1.pth"
-  writer_path: "./logs/log_for_vqvae_for_celeba_full_reinit_1"
+  save_path: "./logs/vqvae_for_celeba_full_reinit_normal.pth"
+  writer_path: "./logs/log_for_vqvae_for_celeba_full_reinit_normal"
   train_args:
     alpha: 1.0
     beta: 0.1

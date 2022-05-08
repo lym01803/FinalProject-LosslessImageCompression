@@ -5,6 +5,7 @@ from roundlib import NNRound, Round
 import moduleregister
 
 from torch.distributions.binomial import Binomial
+from torch.distributions.normal import Normal
 
 
 class NNDistribution(moduleregister.Register):
@@ -84,6 +85,19 @@ class BinomialDistribution(nn.Module):
         x = torch.round(x * 255)
         dist = Binomial(255, y)
         return dist.log_prob(x)
+
+    def sample(self, y):
+        pass
+
+
+@NNDistribution.register
+class UnitGaussianDistribution(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def log_prob(self, x, y):
+        dist = Normal(y, torch.ones_like(y))
+        return dist.log_prob(x)        
 
     def sample(self, y):
         pass
