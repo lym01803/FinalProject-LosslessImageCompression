@@ -1,11 +1,12 @@
 train:
-  model:
+  trainer: ResidualTrainer
+  flows:
     name: IDFlows
     nflows: 8
     nbits: 8
-    nsplit: 3
-    H: 216 # 64
-    W: 184 # 48
+    nsplit: 1
+    H: 27
+    W: 23
     C: 3
     couple:
       name: AdditiveCouple
@@ -13,7 +14,7 @@ train:
       nn:
         name: DenseBlock
         growth_channel: 384
-        depth: 8
+        depth: 12
         layer:
           name: DenseLayer
           act: LeakyReLU
@@ -22,7 +23,7 @@ train:
         nbits: 8
     extenddim:
       name: ExtendDim
-      scale: 2
+      scale: 1
     prior:
       name: Prior
       round:
@@ -40,11 +41,48 @@ train:
     round:
       name: Round
       nbits: 8
-  test_coding: True
+    
+  nouse_vqvae: True
+    
+  vqvae:
+    name: VQVAE
+    checkpoint: '/home/yanming/files/IDFLOW/logs/vqvae_for_celeba_full_reinit.pth'
+    channel: 3
+    embed_num: 8192
+    embed_dim: 512
+    encoder:
+      name: VQEncoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    decoder:
+      name: VQDecoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    distribution:
+      name: BinomialDistribution
+    vectorquantizer:
+      reinit_interval: 1000
+      threshold: 0.1
+    hidden_dims:
+      - 128
+      - 256
+      - 512 # // 8
+    batch_norm: False
+  
+  input_size:
+    - 216
+    - 184
+  
+  patch_batch_size: 0
+
   train_dataloader:
     name: CommonDataLoader
     path: "/home/yanming/files/flow_project/data/img_align_train"
-    batch_size: 4
+    batch_size: 1
     resize:
       - 215
       - 178
@@ -59,7 +97,7 @@ train:
   test_dataloader:
     name: CommonDataLoader
     path: "/home/yanming/files/flow_project/data/img_align_test"
-    batch_size: 4
+    batch_size: 1
     resize:
       - 215
       - 178
@@ -83,6 +121,5 @@ train:
   step_per_epoch: 1000
   evaluate_interval: 5000
   save_interval: 20000
-  save_path: "./logs/model_for_celeba_216_184_dummy.pth"
-  writer_path: "./logs/log_for_celeba_216_184_dummy"
-
+  save_path: "./logs/resflows_novqvae_27_23.pth"
+  writer_path: "./logs/log_for_resflows_novqvae_27_23"

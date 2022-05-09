@@ -1,3 +1,4 @@
+from inspect import Parameter
 import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
@@ -10,10 +11,12 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.datasets as dset
 import torchvision.utils as vutils
 from distlib import DLogistic
+from torch.nn.parameter import Parameter
 
 import numpy as np
 import os
 import math
+import time
 from tqdm import tqdm
 import argparse
 from PIL import Image
@@ -214,7 +217,7 @@ class Trainer:
             bpd = loss.item() / math.log(2.)
             self.writer.add_scalar('train bpd', bpd, self.step)
 
-            if (self.step % self.step_per_epoch == 0 and self.step < self.evaluate_interval) or self.step % self.evaluate_interval == 0:
+            if (self.step in [10, 100, 250]) or (self.step % self.step_per_epoch == 0 and self.step < self.evaluate_interval) or self.step % self.evaluate_interval == 0:
                 print()
                 for splitid, latent in enumerate(x):
                     max_z = torch.max(latent * 256).item()
@@ -225,11 +228,22 @@ class Trainer:
 
                 bpds = []
                 self.model.eval()
-                real_bpds = []
+                forward_time = 0
+                backward_time = 0
+                if self.test_coding:
+                    real_bpds = []
+                    total_time = 0.
+                    rans_en_time = 0.
+                    rans_de_time = 0.
+
                 for iter, data in enumerate(self.testloader):
                     data = data.cuda()
                     with torch.no_grad():
+
+                        t_start = time.time()
                         x, means, logscales, logv = self.model.forward(data, None)
+                        forward_time += time.time() - t_start
+
                         logP, logPs = self.model.log_likelihood(x, means, logscales)
                         loss = torch.mean(-logP, dim=0)
                         bpd = loss.item() / math.log(2.)
@@ -268,24 +282,38 @@ class Trainer:
                             try:
                                 errors = 0
                                 lengths = 0
+                                t0 = time.time()
                                 for i in range(len(x)):
+                                    t1 = time.time()
                                     state = (1<<32)
                                     xi = x[i].reshape(-1).tolist()
                                     mi = means[i].reshape(-1).tolist()
                                     si = torch.exp(logscales[i]).reshape(-1).tolist()
+                                    t2 = time.time()
                                     state, buf = encode(state, len(xi), xi, mi, si)
+                                    t3 = time.time()
                                     state_, msg = decode(state, buf[::-1], len(xi), mi[::-1], si[::-1])
                                     latent = torch.tensor(msg[::-1]).reshape(*x[i].shape).to(x[i])
+                                    t4 = time.time()
                                     errors += torch.sum(x[i] != latent)
                                     lengths += len(buf)
+                                    rans_en_time += t3 - t1
+                                    rans_de_time += t4 - t3 
+                                total_time += time.time() - t0
                                 if iter % 100 == 0:
                                     print(f'state: {state}, state_:{state_}, errors: {errors}, bpd: {(64 * len(x) + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3])}')
                                 real_bpds.append((64 * len(x) + 32 * lengths) / (data.shape[0] * data.shape[1] * data.shape[2] * data.shape[3]))
                             except:
                                 pass
+                if self.test_coding:
+                    print(f'total_time: {total_time}\nrans_en_time: {rans_en_time}\nrans_de_time: {rans_de_time}\nforward_time: {forward_time}')
                 self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
+                with open('./logs/test_bpd_log.txt', 'a') as f:
+                    f.write('{} {:.6f}\n'.format(self.step, sum(bpds) / len(bpds)))
                 if len(real_bpds):
                     self.writer.add_scalar('real bpd', sum(real_bpds) / len(real_bpds), self.step)
+                    with open('./logs/real_bpd_log.txt', 'a') as f:
+                        f.write('{} {:.6f}\n'.format(self.step, sum(real_bpds) / len(real_bpds)))
 
                 self.model.inverse()
                 latents = []
@@ -512,17 +540,19 @@ class ResidualTrainer:
                  evaluate_interval,
                  save_interval,
                  save_path,
-                 writer_path):
+                 writer_path,
+                 nouse_vqvae=False):
 
         self.model = NNFlows.get(flows.pop('name'))(**flows).cuda()
         self.model: IDFlows
 
-        self.vqvae_path = vqvae.pop('checkpoint')
-        self.vqvae = EnDecoder.get(vqvae.pop('name'))(**vqvae)
-        self.vqvae.load_state_dict(torch.load(self.vqvae_path)['model'])
-        self.vqvae = self.vqvae.cuda()
-        self.vqvae.eval() # This state will not be changed. The vqvae is only used to inference.
-        self.vqvae: VQVAE
+        if not nouse_vqvae:
+            self.vqvae_path = vqvae.pop('checkpoint')
+            self.vqvae = EnDecoder.get(vqvae.pop('name'))(**vqvae)
+            self.vqvae.load_state_dict(torch.load(self.vqvae_path)['model'])
+            self.vqvae = self.vqvae.cuda()
+            self.vqvae.eval() # This state will not be changed. The vqvae is only used to inference.
+            self.vqvae: VQVAE
         
         self.trainloader = Register.get(train_dataloader.pop('name'))(**train_dataloader)
         self.testloader = Register.get(test_dataloader.pop('name'))(**test_dataloader)
@@ -538,20 +568,28 @@ class ResidualTrainer:
         self.input_size = input_size
         self.patch = Patching(input_size[0], input_size[1], self.model.H, self.model.W)
         self.patch_batch_size = patch_batch_size
+        self.nouse_vqvae=nouse_vqvae
+
+        assert(not (nouse_vqvae == True and isinstance(self.model, ConditionalFlows)))
 
     def train(self):
         for iter in tqdm(range(self.max_step)):
-            self.vqvae.eval()
+            if not self.nouse_vqvae:
+                self.vqvae.eval()
             self.step += 1
             
             data = next(self.trainloader).cuda() # The original paded data
             with torch.no_grad():
-                rec = self.vqvae.forward((data - 0.5) / 0.5, require_loss=False) * 0.5 + 0.5
-                rec = self.model.round(rec) # should be rounded, because res = data - rec should be integer
-                res = data - rec
-                patches, _ = self.patch(res, None)
-                if isinstance(self.model, ConditionalFlows):
-                    rec_patches, _ = self.patch(rec, None)
+                if not self.nouse_vqvae:
+                    rec = self.vqvae.forward((data - 0.5) / 0.5, require_loss=False) * 0.5 + 0.5
+                    rec = self.model.round(rec) # should be rounded, because res = data - rec should be integer
+                    res = data - rec
+                    patches, _ = self.patch(res, None)
+                    if isinstance(self.model, ConditionalFlows):
+                        rec_patches, _ = self.patch(rec, None)
+                else:
+                    res = data 
+                    patches, _ = self.patch(res, None)
             # patches will be in shape (B * (H // h) * (W // w), 3, h, w)
             # So B should not be too large, B = 2 or 4 will be OK
             
@@ -579,7 +617,8 @@ class ResidualTrainer:
                 minibatch_num = (patches.shape[0] + bs - 1) // bs
                 perm = torch.randperm(patches.shape[0])
                 shuffled_patches = patches[perm]
-                shuffled_rec_patches = rec_patches[perm]
+                if isinstance(self.model, ConditionalFlows):
+                    shuffled_rec_patches = rec_patches[perm]
                 for i in range(minibatch_num):
                     if isinstance(self.model, ConditionalFlows):
                         x, means, logscales, logv = self.model.forward(shuffled_patches[i*bs:i*bs+bs], 
@@ -620,10 +659,14 @@ class ResidualTrainer:
                 for data in tqdm(self.testloader):
                     data = data.cuda()
                     with torch.no_grad():
-                        rec = self.vqvae.forward((data - 0.5) / 0.5, require_loss=False) * 0.5 + 0.5
-                        rec = self.model.round(rec) # should be rounded, because res = data - rec should be integer
-                        res = data - rec
-                        patches, _ = self.patch(res, None)
+                        if not self.nouse_vqvae:
+                            rec = self.vqvae.forward((data - 0.5) / 0.5, require_loss=False) * 0.5 + 0.5
+                            rec = self.model.round(rec) # should be rounded, because res = data - rec should be integer
+                            res = data - rec
+                            patches, _ = self.patch(res, None)
+                        else:
+                            res = data 
+                            patches, _ = self.patch(res, None)
                         if isinstance(self.model, ConditionalFlows):
                             x, means, logscales, logv = self.model.forward(patches,
                                                                            None,
@@ -637,16 +680,24 @@ class ResidualTrainer:
                 self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
 
                 # show the original image, original res, rec, res and rec + res
-                self.writer.add_image('original image', vutils.make_grid(data, nrow=4), self.step)
-                self.writer.add_image('rec by vqvae', vutils.make_grid(rec, nrow=4), self.step)
-                self.writer.add_image('residual (shifted by 0.5)', vutils.make_grid(res + 0.5, nrow=4), self.step)
-                with torch.no_grad():
-                    generated_res = self.model.generated_from_latents(x)
-                    generated_res = self.patch.backward(generated_res) # in shape [B, 3, H, W]
-                    rec_image = rec + generated_res
-                self.writer.add_image('decode residual (shifted by 0.5)', vutils.make_grid(generated_res + 0.5, nrow=4), self.step)
-                self.writer.add_image('rec image', vutils.make_grid(rec_image, nrow=4), self.step)
-                self.writer.add_scalar('test rec error', torch.norm(data - rec_image), self.step)
+                if not self.nouse_vqvae:
+                    self.writer.add_image('original image', vutils.make_grid(data, nrow=4), self.step)
+                    self.writer.add_image('rec by vqvae', vutils.make_grid(rec, nrow=4), self.step)
+                    self.writer.add_image('residual (shifted by 0.5)', vutils.make_grid(res + 0.5, nrow=4), self.step)
+                    with torch.no_grad():
+                        generated_res = self.model.generated_from_latents(x)
+                        generated_res = self.patch.backward(generated_res) # in shape [B, 3, H, W]
+                        rec_image = rec + generated_res
+                    self.writer.add_image('decode residual (shifted by 0.5)', vutils.make_grid(generated_res + 0.5, nrow=4), self.step)
+                    self.writer.add_image('rec image', vutils.make_grid(rec_image, nrow=4), self.step)
+                    self.writer.add_scalar('test rec error', torch.norm(data - rec_image), self.step)
+                else:
+                    self.writer.add_image('original image', vutils.make_grid(data, nrow=4), self.step)
+                    with torch.no_grad():
+                        generated_res = self.model.generated_from_latents(x)
+                        generated_res = self.patch.backward(generated_res) # in shape [B, 3, H, W]
+                    self.writer.add_image('decode rec', vutils.make_grid(generated_res, nrow=4), self.step)
+                    self.writer.add_scalar('test rec error', torch.norm(data - generated_res), self.step)
                 
 
             if (self.step % self.step_per_epoch == 0 and self.step < self.save_interval) or self.step % self.save_interval == 0:
@@ -657,3 +708,72 @@ class ResidualTrainer:
                 )
                 torch.save(state, self.save_path)
 
+
+@Register.register
+class Finetuner:
+    def __init__(self,
+                 model,
+                 train_dataloader,
+                 test_dataloader,
+                 optimizer,
+                 scheduler,
+                 max_step,
+                 step_per_epoch,
+                 evaluate_interval,
+                 save_interval,
+                 save_path,
+                 writer_path,
+                 fine_tune=False,
+                 fine_tune_lr=1e-3):
+    
+        if 'load_path' in model:
+            load_path = model.pop('load_path')
+        else:
+            load_path = None
+        self.model = NNFlows.get(model.pop('name'))(**model)
+        if load_path is not None:
+            self.model.load_state_dict(torch.load(load_path)['model'])
+        self.model = self.model.cuda()
+        
+        self.trainloader = Register.get(train_dataloader.pop('name'))(**train_dataloader)
+        self.testloader = Register.get(test_dataloader.pop('name'))(**test_dataloader)
+        self.optimizer = Register.get(optimizer.pop('name'))(self.model.parameters(), **optimizer)
+        self.scheduler = Register.get(scheduler.pop('name'))(self.optimizer, **scheduler)
+        self.max_step = max_step
+        self.step_per_epoch = step_per_epoch
+        self.evaluate_interval = evaluate_interval
+        self.save_interval = save_interval
+        self.save_path = save_path
+        self.writer = SummaryWriter(log_dir=writer_path)
+        self.step = 0
+        self.fine_tune = fine_tune
+        if self.fine_tune:
+            with torch.no_grad():
+                self.tuner = Parameter(torch.zeros(self.model.C, self.model.H, self.model.W)).cuda()
+            self.tuner_opt = Register.get('Adam')([self.tuner], lr=fine_tune_lr)
+    
+    def train(self):
+        self.model.eval()
+        bpds = []
+        for iter in tqdm(range(self.max_step)):
+            self.step += 1
+            data = next(self.trainloader).cuda()
+            
+            if self.fine_tune:
+                data += self.tuner
+
+            x, means, logscales, logv = self.model.forward(data, None)
+            logP, logPs = self.model.log_likelihood(x, means, logscales)
+            loss = torch.mean(-logP, dim=0)
+            if self.fine_tune:
+                loss.backward()
+                self.tuner_opt.step()
+                self.tuner_opt.zero_grad()
+
+            bpd = loss.item() / math.log(2.)
+            bpds.append(bpd)
+            self.writer.add_scalar('bpd', bpd, self.step)
+            if self.step % self.evaluate_interval == 0:
+                self.writer.add_scalar('bpd mean', sum(bpds) / len(bpds), self.step)
+                bpds = [] 
+            
