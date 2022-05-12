@@ -1,0 +1,75 @@
+train:
+  trainer: VQVAETrainer
+  model:
+    name: VQVAE
+    channel: 3
+    embed_num: 16384
+    embed_dim: 512
+    encoder:
+      name: VQEncoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    decoder:
+      name: VQDecoder
+      block_num: 8
+      block:
+        name: ResBlock
+        batch_norm: False
+    distribution:
+      name: BinomialDistribution
+    vectorquantizer:
+      reinit_interval: 1000
+      threshold: 0.1
+    hidden_dims:
+      - 128
+      - 256
+      - 384 # // 8
+    batch_norm: False
+  
+  train_dataloader:
+    name: CustomDataLoader
+    dataset:
+      name: ImageNet64Dataset
+      path: "/home/yanming/files/ImageNet64"
+      size: 
+        - 3
+        - 64
+        - 64
+      train: True
+    batch_size: 32
+    nbits: 8
+    train: True
+  test_dataloader:
+    name: CustomDataLoader
+    dataset:
+      name: ImageNet64Dataset
+      path: "/home/yanming/files/ImageNet64/"
+      size:
+        - 3
+        - 64
+        - 64
+      train: False
+    batch_size: 32
+    nbits: 8
+    train: False
+  
+  optimizer:
+    name: Adam
+    lr: 0.0001
+  scheduler:
+    name: WarmUpScheduler
+    warmup: 10
+    beta: 0.99
+  max_step: 1000000
+  step_per_epoch: 1000
+  evaluate_interval: 5000
+  save_interval: 20000
+  save_path: "./logs/vqvae_for_imagenet64.pth"
+  writer_path: "./logs/log_for_vqvae_for_imagenet64"
+  train_args:
+    alpha: 1.0
+    beta: 0.1
+    gamma: 0.25
+

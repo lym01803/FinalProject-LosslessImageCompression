@@ -58,8 +58,8 @@ options:
       - 8
   sample:
     batch_size: 64
-    nums: 4096
+    nums: 64
     temp:
       - 1.0
-    nrow: 32
+    nrow: 8
   
