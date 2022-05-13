@@ -25,7 +25,7 @@ class NNFlows(moduleregister.Register):
 class IDFlows(nn.Module):
     def __init__(self, nflows=8, nbits=8, nsplit=3, H=64, W=64, C=3, 
                  couple=None, extenddim=None, prior=None, 
-                 distribution=None, round=None):
+                 distribution=None, round=None, batch_squeeze=0):
         '''
         params:
             nflows: number of flows
@@ -53,7 +53,10 @@ class IDFlows(nn.Module):
         self.extenddim_type = NNExtendDim.get(extenddim.pop('name'))
         self.dist_type = NNDistribution.get(distribution.pop('name'))
         self.round_type = NNRound.get(round.pop('name'))
+        self.batch_squeeze = batch_squeeze
         channel = C
+        if batch_squeeze:
+            channel *= batch_squeeze
         h = H
         w = W
         extendscale = extenddim.get('scale')
@@ -86,6 +89,11 @@ class IDFlows(nn.Module):
         The output be latents, mean, logscales.
         For compression, you need to encode them further more.
         '''
+        if self.batch_squeeze > 0:
+            while x.shape[0] < self.batch_squeeze:
+                x = torch.cat((x, x[0].unsqueeze(dim=0)), dim=0)
+            x = x.reshape(1, x.shape[0] * x.shape[1], x.shape[2], x.shape[3])
+            
         latents = []
         means = []
         logscales = []
@@ -124,6 +132,8 @@ class IDFlows(nn.Module):
                 x = z
             x = block['flows'].backward(x)
             x = block['extend'].backward(x)
+        if self.batch_squeeze > 0:
+            x = x.reshape(-1, 3, x.shape[2], x.shape[3])
         return x
 
     def generated_from_latents(self, latents):
@@ -137,6 +147,8 @@ class IDFlows(nn.Module):
                 x = z
             x = block['flows'].backward(x)
             x = block['extend'].backward(x)
+        if self.batch_squeeze > 0:
+            x = x.reshape(-1, 3, x.shape[2], x.shape[3])
         return x
 
     def log_likelihood(self, latents, means, logscales):

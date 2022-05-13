@@ -20,12 +20,14 @@ import time
 from tqdm import tqdm
 import argparse
 from PIL import Image
+import random
 
 from moduleregister import Register
 from flows import ConditionalFlows, IDFlows, NNFlows
 from roundlib import Round
 from vqvae import VQVAE, EnDecoder
 from extenddim import Patching
+
 
 from rans.rans import encode, decode
 
@@ -143,6 +145,26 @@ class ImageNet64Dataset(Dataset):
             data_idx += 1
         data = self.datas[data_idx][index]
         return self.toImage(data)
+
+
+@Register.register
+class RandomScaledCelebA(Dataset):
+    def __init__(self, path, size=[3, 215, 178]):
+        self.path = path
+        self.size = size
+        self.imagelist = os.listdir(path)
+    
+    def __len__(self):
+        return len(self.imagelist)
+
+    def __getitem__(self, index):
+        image = Image.open(os.path.join(self.path, self.imagelist[index])).convert('RGB')
+        r = random.random() * 0.3 + 0.7
+        image = transforms.CenterCrop((int(r * self.size[1]), int(r * self.size[2])))(image)
+        image = transforms.Resize((self.shape[1], self.shape[2]))(image)
+        image = transforms.ToTensor()(image)
+        return image
+        
 
 
 @Register.register
@@ -310,7 +332,7 @@ class Trainer:
                 self.writer.add_scalar('test bpd', sum(bpds) / len(bpds), self.step)
                 with open('./logs/test_bpd_log.txt', 'a') as f:
                     f.write('{} {:.6f}\n'.format(self.step, sum(bpds) / len(bpds)))
-                if len(real_bpds):
+                if self.test_coding and len(real_bpds):
                     self.writer.add_scalar('real bpd', sum(real_bpds) / len(real_bpds), self.step)
                     with open('./logs/real_bpd_log.txt', 'a') as f:
                         f.write('{} {:.6f}\n'.format(self.step, sum(real_bpds) / len(real_bpds)))
